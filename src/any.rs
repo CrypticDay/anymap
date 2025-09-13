@@ -21,20 +21,14 @@ macro_rules! impl_clone {
         impl Clone for Box<$t> {
             #[inline]
             fn clone(&self) -> Box<$t> {
-                // SAFETY: this dance is to reapply any Send/Sync marker. I’m not happy about this
-                // approach, given that I used to do it in safe code, but then came a dodgy
-                // future-compatibility warning where_clauses_object_safety, which is spurious for
-                // auto traits but still super annoying (future-compatibility lints seem to mean
-                // your bin crate needs a corresponding allow!). Although I explained my plight¹
-                // and it was all explained and agreed upon, no action has been taken. So I finally
-                // caved and worked around it by doing it this way, which matches what’s done for
-                // core::any², so it’s probably not *too* bad.
-                //
-                // ¹ https://github.com/rust-lang/rust/issues/51443#issuecomment-421988013
-                // ² https://github.com/rust-lang/rust/blob/e7825f2b690c9a0d21b6f6d84c404bb53b151b38/library/alloc/src/boxed.rs#L1613-L1616
+               
                 let clone: Box<dyn CloneAny> = (**self).clone_to_any();
+
+                
                 let raw: *mut dyn CloneAny = Box::into_raw(clone);
-                unsafe { Box::from_raw(std::mem::transmute::<*mut dyn CloneAny, *mut $t>(raw)) }
+
+               
+                unsafe { Box::from_raw(raw as *mut $t) }
             }
         }
 
@@ -46,6 +40,7 @@ macro_rules! impl_clone {
         }
     }
 }
+
 
 /// Methods for downcasting from an `Any`-like trait object.
 ///
