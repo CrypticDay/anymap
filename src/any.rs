@@ -1,5 +1,6 @@
 use core::fmt;
 use core::any::{Any, TypeId};
+use core::mem;
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
@@ -16,50 +17,116 @@ impl<T: Any + Clone> CloneToAny for T {
     }
 }
 
-macro_rules! impl_clone {
-    ($t:ty) => {
-        impl Clone for Box<$t> {
-            #[inline]
-            fn clone(&self) -> Box<$t> {
-               
-                let clone: Box<dyn CloneAny> = (**self).clone_to_any();
+#[doc(hidden)]
+pub trait CloneToAnySend {
+    /// Clone `self` into a new `Box<dyn CloneAny + Send>` object.
+    fn clone_to_any_send(&self) -> Box<dyn CloneAny + Send>;
+}
 
-                
-                let raw: *mut dyn CloneAny = Box::into_raw(clone);
+impl<T: Any + Clone + Send> CloneToAnySend for T {
+    #[inline]
+    fn clone_to_any_send(&self) -> Box<dyn CloneAny + Send> {
+        Box::new(self.clone())
+    }
+}
 
-               
-                unsafe { Box::from_raw(raw as *mut $t) }
-            }
-        }
+#[doc(hidden)]
+pub trait CloneToAnySendSync {
+    /// Clone `self` into a new `Box<dyn CloneAny + Send + Sync>` object.
+    fn clone_to_any_send_sync(&self) -> Box<dyn CloneAny + Send + Sync>;
+}
 
-        impl fmt::Debug for $t {
-            #[inline]
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.pad(stringify!($t))
-            }
+impl<T: Any + Clone + Send + Sync> CloneToAnySendSync for T {
+    #[inline]
+    fn clone_to_any_send_sync(&self) -> Box<dyn CloneAny + Send + Sync> {
+        Box::new(self.clone())
+    }
+}
+
+// Basic implementation for dyn CloneAny
+impl Clone for Box<dyn CloneAny> {
+    #[inline]
+    fn clone(&self) -> Box<dyn CloneAny> {
+        (**self).clone_to_any()
+    }
+}
+
+// Implementation for dyn CloneAny + Send
+impl Clone for Box<dyn CloneAny + Send> {
+    #[inline]
+    fn clone(&self) -> Box<dyn CloneAny + Send> {
+        // We need to use transmute here because the trait object doesn't directly
+        // implement CloneToAnySend, but the underlying concrete type does
+        unsafe {
+            let type_id = (**self).type_id();
+            let clone_any = (**self).clone_to_any();
+            
+            // This is safe because:
+            // 1. We know the original was Send (it's in a Box<dyn CloneAny + Send>)
+            // 2. The clone has the same concrete type as the original
+            // 3. Therefore the clone is also Send
+            mem::transmute::<Box<dyn CloneAny>, Box<dyn CloneAny + Send>>(clone_any)
         }
     }
 }
 
+// Implementation for dyn CloneAny + Send + Sync  
+impl Clone for Box<dyn CloneAny + Send + Sync> {
+    #[inline]
+    fn clone(&self) -> Box<dyn CloneAny + Send + Sync> {
+        // Same logic as above, but for Send + Sync
+        unsafe {
+            let type_id = (**self).type_id();
+            let clone_any = (**self).clone_to_any();
+            
+            // This is safe because:
+            // 1. We know the original was Send + Sync
+            // 2. The clone has the same concrete type as the original  
+            // 3. Therefore the clone is also Send + Sync
+            mem::transmute::<Box<dyn CloneAny>, Box<dyn CloneAny + Send + Sync>>(clone_any)
+        }
+    }
+}
+
+impl fmt::Debug for dyn CloneAny {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.pad("dyn CloneAny")
+    }
+}
+
+impl fmt::Debug for dyn CloneAny + Send {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.pad("dyn CloneAny + Send")
+    }
+}
+
+impl fmt::Debug for dyn CloneAny + Send + Sync {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.pad("dyn CloneAny + Send + Sync")
+    }
+}
 
 /// Methods for downcasting from an `Any`-like trait object.
 ///
 /// This should only be implemented on trait objects for subtraits of `Any`, though you can
-/// implement it for other types and it’ll work fine, so long as your implementation is correct.
+/// implement it for other types and it'll work fine, so long as your implementation is correct.
 pub trait Downcast {
     /// Gets the `TypeId` of `self`.
     fn type_id(&self) -> TypeId;
 
     // Note the bound through these downcast methods is 'static, rather than the inexpressible
     // concept of Self-but-as-a-trait (where Self is `dyn Trait`). This is sufficient, exceeding
-    // TypeId’s requirements. Sure, you *can* do CloneAny.downcast_unchecked::<NotClone>() and the
-    // type system won’t protect you, but that doesn’t introduce any unsafety: the method is
+    // TypeId's requirements. Sure, you *can* do CloneAny.downcast_unchecked::<NotClone>() and the
+    // type system won't protect you, but that doesn't introduce any unsafety: the method is
     // already unsafe because you can specify the wrong type, and if this were exposing safe
     // downcasting, CloneAny.downcast::<NotClone>() would just return an error, which is just as
     // correct.
     //
-    // Now in theory we could also add T: ?Sized, but that doesn’t play nicely with the common
-    // implementation, so I’m doing without it.
+    // Now in theory we could also add T: ?Sized, but that doesn't play nicely with the common
+    // implementation, so I'm doing without it.
 
     /// Downcast from `&Any` to `&T`, without checking the type matches.
     ///
@@ -130,11 +197,9 @@ implement!(Any + Send + Sync);
 ///
 /// Every type with no non-`'static` references that implements `Clone` implements `CloneAny`.
 /// See [`core::any`] for more details on `Any` in general.
-pub trait CloneAny: Any + CloneToAny { }
-impl<T: Any + Clone> CloneAny for T { }
+pub trait CloneAny: Any + CloneToAny {}
+impl<T: Any + Clone> CloneAny for T {}
+
 implement!(CloneAny);
 implement!(CloneAny + Send);
 implement!(CloneAny + Send + Sync);
-impl_clone!(dyn CloneAny);
-impl_clone!(dyn CloneAny + Send);
-impl_clone!(dyn CloneAny + Send + Sync);
