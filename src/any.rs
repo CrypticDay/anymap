@@ -34,7 +34,7 @@ macro_rules! impl_clone {
                 // ² https://github.com/rust-lang/rust/blob/e7825f2b690c9a0d21b6f6d84c404bb53b151b38/library/alloc/src/boxed.rs#L1613-L1616
                 let clone: Box<dyn CloneAny> = (**self).clone_to_any();
                 let raw: *mut dyn CloneAny = Box::into_raw(clone);
-                unsafe { Box::from_raw(raw as *mut $t) }
+                unsafe { std::mem::transmute::<*mut dyn CloneAny, *mut $t>(raw) }
             }
         }
 
